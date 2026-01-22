@@ -337,18 +337,17 @@ return (
                     <div className="h-64 rounded-[2.5rem] bg-white shadow-lg flex flex-col justify-center items-center p-8 relative border border-slate-50 overflow-hidden shrink-0">
                         
                       {/* INDICADOR GPS MEJORADO - CENTRADO */}
-                {isTracking && (
-                  <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-sm">
+                {/* INDICADOR GPS - Ahora siempre ocupa su lugar para evitar que el contenido se mueva */}
+                    <div className={`flex items-center gap-2 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-sm transition-opacity duration-300 ${isTracking ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                     <div className="flex items-end gap-0.5 h-4">
-                      <div className={`w-1 h-2 rounded-sm ${currentQuality.bgColor}`}></div>
-                      <div className={`w-1 h-3 rounded-sm ${currentQuality.icon >= 2 ? currentQuality.bgColor : 'bg-slate-200'}`}></div>
-                      <div className={`w-1 h-4 rounded-sm ${currentQuality.icon >= 3 ? currentQuality.bgColor : 'bg-slate-200'} ${currentQuality.icon >= 3 ? 'animate-pulse' : ''}`}></div>
+                        <div className={`w-1 h-2 rounded-sm ${currentQuality.bgColor}`}></div>
+                        <div className={`w-1 h-3 rounded-sm ${currentQuality.icon >= 2 ? currentQuality.bgColor : 'bg-slate-200'}`}></div>
+                        <div className={`w-1 h-4 rounded-sm ${currentQuality.icon >= 3 ? currentQuality.bgColor : 'bg-slate-200'} ${currentQuality.icon >= 3 ? 'animate-pulse' : ''}`}></div>
                     </div>
                     <span className={`text-[8px] font-black uppercase tracking-widest ${currentQuality.color}`}>
-                      GPS {currentQuality.text}
+                        GPS {currentQuality.text}
                     </span>
-                  </div>
-                )}
+                    </div>
                 
                 {/* Número grande de millas */}
                 <div className="flex items-baseline justify-center gap-1">
@@ -377,43 +376,78 @@ return (
                     <div>
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 pl-2 sticky top-0 bg-white/90 backdrop-blur-sm py-2 z-10">Historial Reciente</p>
                         <div className="space-y-3">
+                            // ... (mantenemos el resto del código igual hasta llegar al map de todayTrips)
+
                             {todayTrips.map(trip => (
-                                <div key={trip.id} className={`p-4 border rounded-3xl flex justify-between items-center shadow-sm hover:shadow-md transition-all ${trip.isOptimistic ? 'bg-emerald-50/50 border-emerald-100 animate-pulse' : 'bg-white'}`}>
-                                    <div className="flex items-center gap-4 flex-1 min-w-0">
-                                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${trip.tipo === 'trabajo' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
-                                            {trip.isOptimistic ? <RefreshCw size={20} className="animate-spin" /> : (trip.tipo === 'trabajo' ? <Briefcase size={20} /> : <UserIcon size={20} />)}
-                                        </div>
-                                        <div className="truncate pr-2 flex-1">
-                                            <p className="font-black text-slate-900 leading-none text-xl mb-1">{trip.millas} <span className="text-sm text-slate-300">mi</span></p>
-                                            <p className="text-[10px] text-slate-500 font-bold truncate w-full mb-1">
-                                                {trip.origen || '---'} <span className="text-slate-300">➔</span> {trip.destino || '---'}
+                                <div key={trip.id} className={`p-4 border rounded-[2rem] flex items-center gap-3 shadow-sm hover:shadow-md transition-all ${trip.isOptimistic ? 'bg-emerald-50/50 border-emerald-100 animate-pulse' : 'bg-white border-slate-100'}`}>
+                                    
+                                    {/* 1. ICONO INDICADOR DE RUTA (ORIGEN -> DESTINO) */}
+                                    <div className={`w-10 h-14 rounded-2xl flex flex-col items-center justify-center shrink-0 ${trip.tipo === 'trabajo' ? 'bg-emerald-50' : 'bg-slate-50'}`}>
+                                        <div className={`w-2 h-2 rounded-full ${trip.tipo === 'trabajo' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
+                                        <div className="w-0.5 h-4 bg-slate-200 my-1" />
+                                        <div className={`w-2 h-2 rounded-full border-2 ${trip.tipo === 'trabajo' ? 'border-emerald-500' : 'border-slate-400'}`} />
+                                    </div>
+
+                                    {/* 2. CONTENIDO CENTRAL: DIRECCIONES Y INFO */}
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex flex-col">
+                                            {/* ORIGEN */}
+                                            <p className="text-[11px] font-black text-slate-800 truncate leading-tight">
+                                                {trip.origen || 'Origen no detectado'}
                                             </p>
-                                            <div className="flex items-center gap-2">
-                                                <p className="text-[9px] text-slate-400 uppercase font-bold">
-                                                    {formatDateForInput(trip.fecha)}
-                                                </p>
-                                                {trip.vehiculoLabel && (
-                                                    <>
-                                                        <span className="text-[8px] text-slate-300">•</span>
-                                                        <span className="text-[8px] font-bold bg-slate-100 text-slate-500 px-1 rounded uppercase">
-                                                            {trip.vehiculoLabel.split(' ')[0]}
-                                                        </span>
-                                                    </>
-                                                )}
-                                                {trip.isOptimistic && <span className="text-[8px] text-emerald-500 font-bold bg-emerald-100 px-1 rounded">GUARDANDO...</span>}
+                                            
+                                            {/* DIVISOR SUTIL */}
+                                            <div className="flex items-center gap-2 my-1">
+                                                <div className="h-[1px] flex-1 bg-slate-50" />
+                                                <span className="text-[8px] text-slate-300 font-bold uppercase tracking-widest">A</span>
+                                                <div className="h-[1px] flex-1 bg-slate-50" />
                                             </div>
+
+                                            {/* DESTINO */}
+                                            <p className="text-[11px] font-bold text-slate-500 truncate leading-tight">
+                                                {trip.destino || 'Destino no detectado'}
+                                            </p>
+                                        </div>
+                                        
+                                        {/* METADATOS: FECHA Y PLACA */}
+                                        <div className="flex items-center gap-2 mt-2">
+                                            <p className="text-[9px] text-slate-400 font-bold">
+                                                {formatDateForInput(trip.fecha)}
+                                            </p>
+                                            {trip.vehiculoLabel && (
+                                                <>
+                                                    <span className="text-slate-200">•</span>
+                                                    <span className="text-[8px] font-black bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded uppercase tracking-tighter">
+                                                        {trip.vehiculoLabel.split(' ')[0]}
+                                                    </span>
+                                                </>
+                                            )}
+                                            {trip.isOptimistic && (
+                                                <span className="text-[8px] text-emerald-500 font-bold bg-emerald-100 px-1 rounded animate-pulse">
+                                                    GUARDANDO...
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
-                                    
-                                    {!trip.isOptimistic && (
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            <button onClick={() => handleEdit(trip)} className="p-3 bg-slate-50 text-slate-400 rounded-2xl active:bg-slate-900 active:text-white transition-colors">
-                                                <Edit2 size={18} />
-                                            </button>
-                                            <button onClick={async () => { if(window.confirm("¿Eliminar?")) await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'viajes', trip.id)) }} className="p-3 bg-rose-50 text-rose-400 rounded-2xl active:bg-rose-600 active:text-white transition-colors">
-                                                <Trash2 size={18} />
-                                            </button>
+
+                                    {/* 3. MILLAS Y ACCIONES (DERECHA) */}
+                                    <div className="flex flex-col items-end gap-2 shrink-0 ml-2">
+                                        <div className="text-right">
+                                            <span className="text-lg font-black text-slate-900 leading-none">
+                                                {trip.millas.toFixed(1)}
+                                            </span>
+                                            <span className="text-[10px] font-bold text-slate-400 ml-0.5">mi</span>
                                         </div>
+                                        
+                                        {!trip.isOptimistic && (
+                                            <div className="flex gap-1">
+                                                <button onClick={() => handleEdit(trip)} className="p-2 bg-slate-50 text-slate-400 rounded-xl active:bg-slate-900 active:text-white">
+                                                    <Edit2 size={14} />
+                                                </button>
+                                                <button onClick={async () => { if(window.confirm("¿Eliminar?")) await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'viajes', trip.id)) }} className="p-2 bg-rose-50 text-rose-400 rounded-xl active:bg-rose-600 active:text-white">
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
                                     )}
                                 </div>
                             ))}

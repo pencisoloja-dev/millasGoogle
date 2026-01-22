@@ -51,47 +51,59 @@ export const useGPS = () => {
   const MAX_ACCURACY = 50;
 
   // 🆕 FUNCIÓN: Geocodificación Inversa con Google Maps API
-  const getAddressFromCoords = async (lat, lon) => {
-    try {
-      const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-      
-      if (!API_KEY) {
-        console.error('⚠️ Google Maps API Key no configurada en .env');
-        setGeocodingError('API Key no configurada');
-        return null;
-      }
+  // 🆕 FUNCIÓN MEJORADA: Filtra Plus Codes y busca direcciones reales
+const getAddressFromCoords = async (lat, lon) => {
+  try {
+    const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+    if (!API_KEY) return null;
 
-      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${API_KEY}&language=es`;
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${API_KEY}&language=es`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (data.status === 'OK' && data.results.length > 0) {
       
-      log('🌍 Geocodificando:', lat, lon);
+      // 1. Intentamos buscar la primera dirección que NO sea un Plus Code
+      // Buscamos resultados que tengan tipos como 'street_address', 'route', o 'premise'
+      const cleanResult = data.results.find(res => 
+        !res.types.includes('plus_code') && 
+        (res.types.includes('street_address') || 
+         res.types.includes('route') || 
+         res.types.includes('intersection') ||
+         res.types.includes('point_of_interest'))
+      );
+
+      // 2. Si no encontramos una calle específica, buscamos un barrio o ciudad (más amigable)
+      const neighborhoodResult = data.results.find(res => 
+        res.types.includes('neighborhood') || 
+        res.types.includes('locality')
+      );
+
+      // 3. Selección final: Dirección limpia > Barrio > Resultado original (si no hay de otra)
+      const finalAddress = cleanResult?.formatted_address || 
+                           neighborhoodResult?.formatted_address || 
+                           data.results[0].formatted_address;
+
+      const address = {
+        formatted: finalAddress,
+        lat,
+        lon,
+        timestamp: new Date().toISOString()
+      };
       
-      const response = await fetch(url);
-      const data = await response.json();
+      setGeocodingError(null);
+      return address;
       
-      if (data.status === 'OK' && data.results.length > 0) {
-        const address = {
-          formatted: data.results[0].formatted_address,
-          lat,
-          lon,
-          timestamp: new Date().toISOString()
-        };
-        
-        log('✅ Dirección obtenida:', address.formatted);
-        setGeocodingError(null);
-        return address;
-        
-      } else {
-        console.warn('⚠️ Geocodificación sin resultados:', data.status);
-        setGeocodingError(`Error de Google Maps: ${data.status}`);
-        return null;
-      }
-      
-    } catch (error) {
-      console.error('❌ Error en geocodificación:', error);
-      setGeocodingError('Error de conexión al obtener dirección');
+    } else {
+      setGeocodingError(`Error Google: ${data.status}`);
       return null;
     }
-  };
+  } catch (error) {
+    setGeocodingError('Error de conexión');
+    return null;
+  }
+};
 
   // Wrapper para cambiar el tipo y actualizar la referencia al mismo tiempo
   const changeType = (newType) => {
