@@ -1,0 +1,8 @@
+{
+  "appId": "com.tunegocio.controlmillasgastos",
+  "appName": "Control de millas y gastos",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

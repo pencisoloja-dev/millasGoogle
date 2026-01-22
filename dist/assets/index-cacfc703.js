@@ -1,0 +1,1 @@
+import{_ as e}from"./index-e66aa498.js";import{r as t}from"./index-04c9cd05.js";const _=t("Geolocation",{web:()=>e(()=>import("./web-977edc64.js"),["assets/web-977edc64.js","assets/index-04c9cd05.js"]).then(o=>new o.GeolocationWeb)});export{_ as Geolocation};
