@@ -98,10 +98,7 @@ const MileageTracker = ({ user, trips }) => {
   const handleSave = async () => {
     if (!formData.manualMiles) return;
 
-    if (type === 'trabajo' && !formData.proposito.trim()) {
-        alert("El IRS requiere un propósito para deducciones de trabajo.");
-        return;
-    }
+    
 
     setIsSaving(true);
     
