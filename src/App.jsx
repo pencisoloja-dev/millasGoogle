@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { WifiOff, AlertTriangle, X, Map as MapIcon, Receipt, BarChart3, UserCog, LogOut } from 'lucide-react';
+import { WifiOff, AlertTriangle, X, Map as MapIcon, Receipt, BarChart3, UserCog, LogOut, RefreshCw } from 'lucide-react';
 
 // --- NUEVA ARQUITECTURA: IMPORTS ---
 import { useAuth } from './hooks/useAuth';
@@ -17,10 +17,10 @@ import LoadingScreen from './components/ui/LoadingScreen';
 import { PasswordResetModal } from './components/ui/Modals';
 
 export default function App() {
-  // 1. Lógica de Autenticación (Hook Personalizado)
+  // 1. Lógica de Autenticación
   const { user, loadingAuth, passwordResetForced, logout } = useAuth();
   
-  // 2. Lógica de Datos (Hook Personalizado)
+  // 2. Lógica de Datos
   const { trips, expenses } = useData(user);
 
   // 3. Estado Local de la Interfaz
@@ -29,7 +29,6 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   
-  // Banner de Gastos Rechazados
   const [showRejectedBanner, setShowRejectedBanner] = useState(false);
   const [lastRejectedSeenAt, setLastRejectedSeenAt] = useState(() => 
     parseInt(localStorage.getItem('lastRejectedSeenAt') || '0')
@@ -37,7 +36,6 @@ export default function App() {
 
   // --- EFECTOS ---
   
-  // Detectar conexión a internet
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
@@ -49,12 +47,10 @@ export default function App() {
     };
   }, []);
 
-  // Controlar el modal de contraseña forzada
   useEffect(() => {
     if (passwordResetForced) setShowPasswordModal(true);
   }, [passwordResetForced]);
 
-  // Lógica del Banner de Rechazados
   const rejectedCount = useMemo(() => {
     const rejected = expenses.filter(e => e.status === 'rejected');
     const hasNew = rejected.some(e => (e.reviewedAt?.seconds || 0) * 1000 > lastRejectedSeenAt);
@@ -81,16 +77,25 @@ export default function App() {
     }
   };
 
-  // --- RENDERIZADO ---
+  // --- RENDERIZADO QUIRÚRGICO ANTI-PARPADEO ---
 
-  if (loadingAuth) return <LoadingScreen />;
+  // Solo mostramos la pantalla de carga la PRIMERA VEZ (cuando no hay usuario ni se sabe si lo habrá)
+  if (loadingAuth && !user) return <LoadingScreen />;
   
-  // Si no hay usuario, mostramos Login (¡Limpio!)
-  if (!user) return <Login />;
+  // Si no hay usuario y ya dejó de cargar, Login
+  if (!user && !loadingAuth) return <Login />;
 
+  // Si hay usuario (aunque loadingAuth sea true al despertar), mantenemos la UI montada
   return (
-    <div className="h-screen bg-slate-50 flex flex-col relative overflow-hidden font-sans select-none">
+    <div className={`h-screen bg-slate-50 flex flex-col relative overflow-hidden font-sans select-none transition-opacity duration-300 ${loadingAuth ? 'opacity-80' : 'opacity-100'}`}>
       
+      {/* Indicador de carga sutil (Spinner de fondo) */}
+      {loadingAuth && (
+        <div className="absolute top-10 right-10 z-[200] animate-spin text-slate-400">
+          <RefreshCw size={16} />
+        </div>
+      )}
+
       {/* --- CAPA SUPERIOR (Modales y Alertas) --- */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 

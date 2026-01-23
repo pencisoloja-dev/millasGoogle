@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { Briefcase, User as UserIcon, Edit2, Trash2, RefreshCw, CalendarDays, Car } from 'lucide-react';
+import { Briefcase, User as UserIcon, Edit2, Trash2, RefreshCw, CalendarDays, Car, ClipboardCheck } from 'lucide-react';
 import { Preferences } from '@capacitor/preferences';
 import { db } from '../config/firebase';
 import { APP_ID } from '../constants';
@@ -11,18 +11,9 @@ import ConfigurationModal from '../components/ui/ConfigurationModal';
 
 const MileageTracker = ({ user, trips }) => {
   const { 
-    isTracking, 
-    miles, 
-    type, 
-    setType, 
-    gpsQuality, 
-    wasGPSUsed, 
-    startAddress,
-    endAddress,
-    geocodingError,
-    startTrip, 
-    stopTrip, 
-    resetTrip 
+    isTracking, miles, type, setType, gpsQuality, wasGPSUsed, 
+    startAddress, endAddress, geocodingError,
+    startTrip, stopTrip, resetTrip, savePlace 
   } = useGPS();
   
   const { vehicles } = useVehicles(user);
@@ -31,9 +22,16 @@ const MileageTracker = ({ user, trips }) => {
   const [editingId, setEditingId] = useState(null);
   const [optimisticTrips, setOptimisticTrips] = useState([]);
   const [showBatteryWarn, setShowBatteryWarn] = useState(false);
-  const [formData, setFormData] = useState({ origen: '', destino: '', manualMiles: '', date: '' });
   const [isSaving, setIsSaving] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
+
+  const [formData, setFormData] = useState({ 
+    origen: '', 
+    destino: '', 
+    manualMiles: '', 
+    date: '', 
+    proposito: '' 
+  });
 
   useEffect(() => {
     if (vehicles.length > 0 && !selectedVehicle) {
@@ -43,10 +41,7 @@ const MileageTracker = ({ user, trips }) => {
 
   const getCurrentLocalDate = () => {
     const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   };
 
   const todayTrips = useMemo(() => {
@@ -54,7 +49,6 @@ const MileageTracker = ({ user, trips }) => {
     return allTrips.sort((a,b) => {
         const timeA = a.isOptimistic ? Infinity : (a.fecha?.seconds ?? 0);
         const timeB = b.isOptimistic ? Infinity : (b.fecha?.seconds ?? 0);
-        if (timeA === Infinity && timeB === Infinity) return 0;
         return timeB - timeA;
     });
   }, [trips, optimisticTrips]);
@@ -62,13 +56,7 @@ const MileageTracker = ({ user, trips }) => {
   const formatDateForInput = (timestamp) => {
     if (!timestamp) return getCurrentLocalDate();
     const d = timestamp.seconds ? new Date(timestamp.seconds * 1000) : timestamp;
-    if (d instanceof Date && !isNaN(d)) {
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    }
-    return getCurrentLocalDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
   const handleStopTrip = async () => {
@@ -78,18 +66,14 @@ const MileageTracker = ({ user, trips }) => {
        origen: result.startAddress?.formatted || '', 
        destino: result.endAddress?.formatted || '',
        manualMiles: result.miles.toFixed(1),
-       date: getCurrentLocalDate()
+       date: getCurrentLocalDate(),
+       proposito: '' // Limpieza garantizada
     });
   };
 
   const handleCreateManual = () => {
       setEditingId(null); 
-      setFormData({ 
-          origen: '', 
-          destino: '', 
-          manualMiles: '', 
-          date: getCurrentLocalDate() 
-      }); 
+      setFormData({ origen: '', destino: '', manualMiles: '', date: getCurrentLocalDate(), proposito: '' }); 
       setFormMode('create');
   };
 
@@ -100,37 +84,38 @@ const MileageTracker = ({ user, trips }) => {
           origen: trip.origen, 
           destino: trip.destino, 
           manualMiles: trip.millas.toString(),
-          date: formatDateForInput(trip.fecha)
+          date: formatDateForInput(trip.fecha),
+          proposito: trip.proposito || '' 
       });
       
-      if (trip.vehiculoData && trip.vehiculoData.id) {
+      if (trip.vehiculoData?.id) {
          const foundVehicle = vehicles.find(v => v.id === trip.vehiculoData.id);
          setSelectedVehicle(foundVehicle || trip.vehiculoData);
-      } else if (trip.vehiculoData) {
-         setSelectedVehicle(trip.vehiculoData);
       }
       setFormMode('edit');
   };
 
   const handleSave = async () => {
     if (!formData.manualMiles) return;
+
+    if (type === 'trabajo' && !formData.proposito.trim()) {
+        alert("El IRS requiere un propósito para deducciones de trabajo.");
+        return;
+    }
+
     setIsSaving(true);
     
     const [yearInput, monthInput, dayInput] = formData.date.split('-').map(Number);
     const now = new Date();
-    const isSameDay = 
-        yearInput === now.getFullYear() && 
-        monthInput === (now.getMonth() + 1) && 
-        dayInput === now.getDate();
-
-    let dateToSave;
-    if (isSameDay) {
-        dateToSave = new Date(); 
-    } else {
-        dateToSave = new Date(yearInput, monthInput - 1, dayInput, 12, 0, 0);
-    }
-
+    const isSameDay = yearInput === now.getFullYear() && monthInput === (now.getMonth() + 1) && dayInput === now.getDate();
+    const dateToSave = isSameDay ? new Date() : new Date(yearInput, monthInput - 1, dayInput, 12, 0, 0);
     const firebaseDate = Timestamp.fromDate(dateToSave);
+
+    // APRENDIZAJE AUTOMÁTICO
+    if (wasGPSUsed && formMode === 'create') {
+        if (startAddress) await savePlace(startAddress.lat, startAddress.lon, formData.origen);
+        if (endAddress) await savePlace(endAddress.lat, endAddress.lon, formData.destino);
+    }
 
     const vehiculoInfo = selectedVehicle ? {
         id: selectedVehicle.id,
@@ -143,6 +128,7 @@ const MileageTracker = ({ user, trips }) => {
         millas: parseFloat(formData.manualMiles) || 0,
         origen: formData.origen.trim(),
         destino: formData.destino.trim(),
+        proposito: formData.proposito.trim(),
         tipo: type,
         modo: wasGPSUsed ? 'gps' : 'manual',
         fecha: firebaseDate,
@@ -153,10 +139,7 @@ const MileageTracker = ({ user, trips }) => {
     let tempId = null;
     if (formMode === 'create') {
         tempId = 'temp-' + Date.now();
-        const optimisticTrip = { ...dataToSave, id: tempId, isOptimistic: true };
-        setOptimisticTrips(prev => [optimisticTrip, ...prev]);
-        setFormMode(null);
-        setFormData({ origen: '', destino: '', manualMiles: '', date: '' });
+        setOptimisticTrips(prev => [{ ...dataToSave, id: tempId, isOptimistic: true }, ...prev]);
     }
 
     try {
@@ -165,26 +148,16 @@ const MileageTracker = ({ user, trips }) => {
         await addDoc(securePath, { userId: user.uid, created_at: serverTimestamp(), ...dataToSave });
         resetTrip();
       } else {
-        await updateDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'viajes', editingId), { 
-            millas: dataToSave.millas, 
-            origen: dataToSave.origen, 
-            destino: dataToSave.destino,
-            tipo: dataToSave.tipo,   
-            fecha: dataToSave.fecha,
-            vehiculoData: dataToSave.vehiculoData,
-            vehiculoLabel: dataToSave.vehiculoLabel
-        });
-        setFormMode(null);
-        setFormData({ origen: '', destino: '', manualMiles: '', date: '' });
-        setEditingId(null);
+        await updateDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'viajes', editingId), dataToSave);
       }
+      setFormMode(null);
+      setFormData({ origen: '', destino: '', manualMiles: '', date: '', proposito: '' });
+      setEditingId(null);
     } catch (err) { 
         console.error(err);
-        alert("Revisa tu conexión a internet."); 
+        alert("Error al guardar."); 
     } finally { 
-        if (tempId) {
-            setOptimisticTrips(prev => prev.filter(t => t.id !== tempId));
-        }
+        if (tempId) setOptimisticTrips(prev => prev.filter(t => t.id !== tempId));
         setIsSaving(false); 
     }
   };
@@ -209,6 +182,7 @@ const MileageTracker = ({ user, trips }) => {
 
   return (
     <div className="flex flex-col h-full bg-white font-sans relative overflow-hidden">
+      {/* Encabezado y Selector Tipo */}
       <div className="shrink-0 px-7 pt-7 pb-2 z-10 bg-white">
           <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tighter leading-none mb-2 text-center">CONTROL DE MILLAS</h2>
           <div className="flex bg-slate-100 p-1 rounded-2xl border shadow-inner shrink-0">
@@ -225,6 +199,8 @@ const MileageTracker = ({ user, trips }) => {
                     <p className="text-[10px] font-black text-slate-400 uppercase text-center tracking-widest">
                         {formMode === 'edit' ? 'Editar Registro' : 'Confirmar Viaje'}
                     </p>
+                    
+                    {/* Campos Numéricos y Fecha */}
                     <div className="grid grid-cols-2 gap-3">
                         <div className="relative">
                             <label className="block text-[9px] font-bold text-slate-400 ml-2 mb-1">DISTANCIA</label>
@@ -240,21 +216,22 @@ const MileageTracker = ({ user, trips }) => {
                         </div>
                     </div>
 
-                    {geocodingError && formMode === 'create' && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start gap-2">
-                            <span className="text-amber-600 text-xs">⚠️</span>
-                            <div className="flex-1">
-                                <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide mb-1">No se pudo obtener dirección automática</p>
-                                <p className="text-[9px] text-amber-600">{geocodingError}. Por favor ingresa manualmente.</p>
-                            </div>
-                        </div>
-                    )}
-
+                    {/* Direcciones y Propósito */}
                     <div className="space-y-3">
                         <input placeholder="Origen" value={formData.origen} onChange={e => setFormData({...formData, origen: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500" />
                         <input placeholder="Destino" value={formData.destino} onChange={e => setFormData({...formData, destino: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500" />
+                        
+                        <div className="relative">
+                            <input 
+                                placeholder="Propósito (ej: Entrega de materiales)" 
+                                value={formData.proposito} 
+                                onChange={e => setFormData({...formData, proposito: e.target.value})} 
+                                className="w-full p-3 bg-white border-2 border-slate-100 rounded-2xl text-sm font-bold outline-none focus:border-emerald-500" 
+                            />
+                        </div>
                     </div>
 
+                    {/* Vehículos */}
                     {vehicles.length > 0 && (
                         <div className="space-y-2 pt-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2 flex items-center gap-1"><Car size={12} /> Vehículo</label>
@@ -278,6 +255,7 @@ const MileageTracker = ({ user, trips }) => {
             </div>
           ) : (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                {/* Visualizador Principal */}
                 <div className="h-64 rounded-[2.5rem] bg-white shadow-lg flex flex-col justify-center items-center p-8 relative border border-slate-50 overflow-hidden shrink-0">
                     <div className={`flex items-center gap-2 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-sm transition-opacity duration-300 ${isTracking ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                         <div className="flex items-end gap-0.5 h-4">
@@ -298,6 +276,7 @@ const MileageTracker = ({ user, trips }) => {
                     {!isTracking && <button onClick={handleCreateManual} className="mt-5 text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:text-emerald-800 transition-colors p-2">Ingresar Manualmente</button>}
                 </div>
                 
+                {/* Historial */}
                 <div>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 pl-2 sticky top-0 bg-white/90 backdrop-blur-sm py-2 z-10">Historial Reciente</p>
                     <div className="space-y-3">
@@ -309,29 +288,25 @@ const MileageTracker = ({ user, trips }) => {
                                     <div className={`w-2 h-2 rounded-full border-2 ${trip.tipo === 'trabajo' ? 'border-emerald-500' : 'border-slate-400'}`} />
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex flex-col">
-                                        <p className="text-[11px] font-black text-slate-800 truncate leading-tight">{trip.origen || 'Origen no detectado'}</p>
-                                        <div className="flex items-center gap-2 my-1">
-                                            <div className="h-[1px] flex-1 bg-slate-50" />
-                                            <span className="text-[8px] text-slate-300 font-bold uppercase tracking-widest">A</span>
-                                            <div className="h-[1px] flex-1 bg-slate-50" />
-                                        </div>
-                                        <p className="text-[11px] font-bold text-slate-500 truncate leading-tight">{trip.destino || 'Destino no detectado'}</p>
-                                    </div>
+                                    <p className="text-[11px] font-black text-slate-800 truncate leading-tight">{trip.origen || 'Origen no detectado'}</p>
+                                    <p className="text-[11px] font-bold text-slate-500 truncate leading-tight mt-1">{trip.destino || 'Destino no detectado'}</p>
+                                    
+                                    {trip.proposito && (
+                                        <p className="text-[9px] font-bold text-emerald-600 uppercase italic mt-1 flex items-center gap-1">
+                                            <Briefcase size={10} /> {trip.proposito}
+                                        </p>
+                                    )}
+
                                     <div className="flex items-center gap-2 mt-2">
                                         <p className="text-[9px] text-slate-400 font-bold">{formatDateForInput(trip.fecha)}</p>
                                         {trip.vehiculoLabel && (
-                                            <>
-                                                <span className="text-slate-200">•</span>
-                                                <span className="text-[8px] font-black bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded uppercase tracking-tighter">{trip.vehiculoLabel.split(' ')[0]}</span>
-                                            </>
+                                            <span className="text-[8px] font-black bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded uppercase tracking-tighter">{trip.vehiculoLabel.split(' ')[0]}</span>
                                         )}
-                                        {trip.isOptimistic && <span className="text-[8px] text-emerald-500 font-bold bg-emerald-100 px-1 rounded animate-pulse">GUARDANDO...</span>}
                                     </div>
                                 </div>
-                                <div className="flex flex-col items-end gap-2 shrink-0 ml-2">
+                                <div className="flex flex-col items-end gap-2 shrink-0">
                                     <div className="text-right">
-                                        <span className="text-lg font-black text-slate-900 leading-none">{trip.millas.toFixed(1)}</span>
+                                        <span className="text-lg font-black text-slate-900">{trip.millas.toFixed(1)}</span>
                                         <span className="text-[10px] font-bold text-slate-400 ml-0.5">mi</span>
                                     </div>
                                     {!trip.isOptimistic && (

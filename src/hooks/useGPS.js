@@ -5,7 +5,7 @@ import { Preferences } from '@capacitor/preferences';
 import { calculateDistance } from '../utils/math';
 
 // --- CONFIGURACIÓN DE PRODUCCIÓN ---
-const DEBUG_MODE = false; // 🔴 Cambia a FALSE para producción (oculta logs)
+const DEBUG_MODE = false; 
 const SAVE_THRESHOLD = 0.03; // ~50 metros. Solo guarda en disco si se avanza esto.
 
 // Utilería de log condicional
@@ -24,24 +24,28 @@ export const useGPS = () => {
   const [gpsQuality, setGpsQuality] = useState('good');
   const [wasGPSUsed, setWasGPSUsed] = useState(false);
   
-  // 🆕 ESTADOS PARA GEOCODIFICACIÓN
+  // ESTADOS PARA GEOCODIFICACIÓN
   const [startAddress, setStartAddress] = useState(null);
   const [endAddress, setEndAddress] = useState(null);
   const [geocodingError, setGeocodingError] = useState(null);
-  
+
+  // LUGARES GUARDADOS (Cerebro de la bitácora)
+  const [savedPlaces, setSavedPlaces] = useState([]);
+
+  // Cargar lugares guardados al iniciar
+  useEffect(() => {
+    Preferences.get({ key: 'SAVED_PLACES_V1' }).then(({ value }) => {
+      if (value) setSavedPlaces(JSON.parse(value));
+    });
+  }, []);
+
   // --- REFS (Memoria síncrona para el Watcher) ---
   const watcherId = useRef(null);
   const lastCoords = useRef(null);
   const pathRef = useRef([]);
   const milesRef = useRef(0);
-  
-  // REF CRÍTICO: Mantiene el tipo actualizado dentro del watcher sin reiniciar
   const typeRef = useRef('trabajo'); 
-  
-  // REF DE RENDIMIENTO: Acumulador para no escribir en disco a cada paso
   const unsavedMilesRef = useRef(0);
-
-  // 🆕 REF para rastrear si ya geocodificamos el inicio
   const hasGeocodedStart = useRef(false);
 
   // Configuración de filtros GPS
@@ -50,73 +54,98 @@ export const useGPS = () => {
   const MAX_JUMP = 0.5; 
   const MAX_ACCURACY = 50;
 
-  // 🆕 FUNCIÓN: Geocodificación Inversa con Google Maps API
-  // 🆕 FUNCIÓN MEJORADA: Filtra Plus Codes y busca direcciones reales
-const getAddressFromCoords = async (lat, lon) => {
-  try {
-    const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-    if (!API_KEY) return null;
-
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${API_KEY}&language=es`;
+  // 🆕 FUNCIÓN PARA GUARDAR NUEVOS LUGARES (Aprender)
+  const savePlace = async (lat, lon, name) => {
+    if (!name || name.trim() === "") return;
     
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.status === 'OK' && data.results.length > 0) {
+    try {
+      const { value } = await Preferences.get({ key: 'SAVED_PLACES_V1' });
+      const currentSaved = value ? JSON.parse(value) : [];
       
-      // 1. Intentamos buscar la primera dirección que NO sea un Plus Code
-      // Buscamos resultados que tengan tipos como 'street_address', 'route', o 'premise'
-      const cleanResult = data.results.find(res => 
-        !res.types.includes('plus_code') && 
-        (res.types.includes('street_address') || 
-         res.types.includes('route') || 
-         res.types.includes('intersection') ||
-         res.types.includes('point_of_interest'))
+      // Evitar duplicados exactos en el mismo radio pequeño
+      const isDuplicate = currentSaved.some(p => 
+        calculateDistance(p.lat, p.lon, lat, lon) < 0.02 && p.name === name.trim()
       );
 
-      // 2. Si no encontramos una calle específica, buscamos un barrio o ciudad (más amigable)
-      const neighborhoodResult = data.results.find(res => 
-        res.types.includes('neighborhood') || 
-        res.types.includes('locality')
-      );
+      if (isDuplicate) return;
 
-      // 3. Selección final: Dirección limpia > Barrio > Resultado original (si no hay de otra)
-      const finalAddress = cleanResult?.formatted_address || 
-                           neighborhoodResult?.formatted_address || 
-                           data.results[0].formatted_address;
+      const updatedPlaces = [...currentSaved, { lat, lon, name: name.trim() }];
+      setSavedPlaces(updatedPlaces);
+      await Preferences.set({
+        key: 'SAVED_PLACES_V1',
+        value: JSON.stringify(updatedPlaces)
+      });
+      log("📍 Nuevo lugar aprendido:", name);
+    } catch (e) {
+      console.error("Error al aprender lugar:", e);
+    }
+  };
 
-      const address = {
-        formatted: finalAddress,
-        lat,
-        lon,
-        timestamp: new Date().toISOString()
-      };
+  const identifySavedPlace = (lat, lon, originalAddress) => {
+    const nearbyPlace = savedPlaces.find(place => {
+      const d = calculateDistance(place.lat, place.lon, lat, lon);
+      return d <= 0.05; // 50 metros de radio
+    });
+    return nearbyPlace ? nearbyPlace.name : originalAddress;
+  };
+
+  // Geocodificación Inversa: Filtra Plus Codes y busca direcciones reales
+  const getAddressFromCoords = async (lat, lon) => {
+    try {
+      const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+      if (!API_KEY) return null;
+
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${API_KEY}&language=es`;
       
-      setGeocodingError(null);
-      return address;
+      const response = await fetch(url);
+      const data = await response.json();
       
-    } else {
-      setGeocodingError(`Error Google: ${data.status}`);
+      if (data.status === 'OK' && data.results.length > 0) {
+        // Priorizar direcciones de calle o establecimientos (evitar plus_code)
+        const cleanResult = data.results.find(res => 
+          !res.types.includes('plus_code') && 
+          (res.types.includes('street_address') || 
+           res.types.includes('route') || 
+           res.types.includes('establishment'))
+        );
+
+        const neighborhoodResult = data.results.find(res => 
+          res.types.includes('neighborhood') || 
+          res.types.includes('locality')
+        );
+
+        const finalAddressText = cleanResult?.formatted_address || 
+                                 neighborhoodResult?.formatted_address || 
+                                 data.results[0].formatted_address;
+
+        // Verificar si el lugar ya está en el diccionario de la bitácora
+        const personalizedName = identifySavedPlace(lat, lon, finalAddressText);
+
+        setGeocodingError(null);
+        return {
+          formatted: personalizedName,
+          lat,
+          lon,
+          timestamp: new Date().toISOString()
+        };
+      } else {
+        setGeocodingError(`Error Google: ${data.status}`);
+        return null;
+      }
+    } catch (error) {
+      setGeocodingError('Error de conexión');
       return null;
     }
-  } catch (error) {
-    setGeocodingError('Error de conexión');
-    return null;
-  }
-};
+  };
 
-  // Wrapper para cambiar el tipo y actualizar la referencia al mismo tiempo
   const changeType = (newType) => {
     setType(newType);
     typeRef.current = newType;
-    // Si estamos rastreando, forzamos un guardado inmediato para asegurar el cambio
     if (isTracking) {
       saveToDisk(milesRef.current, pathRef.current);
     }
   };
 
-  // --- 1. FUNCIÓN: Guardar en Disco (Optimizado) ---
-  // NOTA: NO guardamos las direcciones aquí (solo en memoria)
   const saveToDisk = async (currentMiles, currentPathData) => {
     try {
       const stateToSave = {
@@ -134,45 +163,33 @@ const getAddressFromCoords = async (lat, lon) => {
       });
       
       unsavedMilesRef.current = 0;
-      log("💾 Estado guardado en disco. Tipo:", typeRef.current);
-
+      log("💾 Estado guardado en disco.");
     } catch (e) {
       console.error("Error guardando estado:", e);
     }
   };
 
-  // --- 2. MOTOR DEL GPS ---
   const _startWatcher = async (initialMiles = 0, initialPath = [], initialType = 'trabajo') => {
     try {
-      // Inicialización de Refs y Estados
       setMiles(initialMiles);
       milesRef.current = initialMiles;
       unsavedMilesRef.current = 0;
-      
       setCurrentPath(initialPath);
       pathRef.current = initialPath;
-      
-      // Sincronizar Type y TypeRef
       setType(initialType);
       typeRef.current = initialType;
-      
-      // 🆕 Resetear flag de geocodificación de inicio
       hasGeocodedStart.current = false;
       
       if (initialPath.length > 0) {
         lastCoords.current = initialPath[initialPath.length - 1];
         setWasGPSUsed(true);
-        // 🆕 Si estamos restaurando un viaje, marcamos que ya geocodificamos
         hasGeocodedStart.current = true;
       }
 
-      // Verificación de Permisos
       const status = await BackgroundGeolocation.checkPermissions();
       if (status.location !== 'granted') {
-          const request = await BackgroundGeolocation.requestPermissions();
-          if (request.location !== 'granted') {
-              throw new Error("Se requiere permiso de ubicación.");
-          }
+        const request = await BackgroundGeolocation.requestPermissions();
+        if (request.location !== 'granted') throw new Error("Permiso denegado");
       }
 
       setIsTracking(true);
@@ -191,16 +208,12 @@ const getAddressFromCoords = async (lat, lon) => {
         },
         (location, error) => {
           if (error) {
-            console.error('GPS Error:', error);
             if (error.code === 'NOT_AUTHORIZED') setGpsQuality('poor');
             return;
           }
 
-          const lat = location.latitude;
-          const lon = location.longitude;
-          const accuracy = location.accuracy || 20;
+          const { latitude: lat, longitude: lon, accuracy = 20 } = location;
 
-          // Indicador de Calidad
           if (accuracy > 30) setGpsQuality('poor');
           else if (accuracy > 15) setGpsQuality('medium');
           else setGpsQuality('good');
@@ -209,19 +222,10 @@ const getAddressFromCoords = async (lat, lon) => {
 
           const point = { lat, lon, accuracy };
 
-          // Lógica de Distancia
           if (lastCoords.current) {
-            const d = calculateDistance(
-              lastCoords.current.lat,
-              lastCoords.current.lon,
-              lat,
-              lon
-            );
+            const d = calculateDistance(lastCoords.current.lat, lastCoords.current.lon, lat, lon);
 
-            if (d > MAX_JUMP) {
-                log('Salto ignorado:', d);
-                return; 
-            }
+            if (d > MAX_JUMP) return;
 
             if (d >= MIN_MOVEMENT) {
               const newMiles = milesRef.current + d;
@@ -230,55 +234,30 @@ const getAddressFromCoords = async (lat, lon) => {
 
               setMiles(newMiles);
               setWasGPSUsed(true);
-              
               lastCoords.current = point;
               pathRef.current.push(point);
-              
-              if (pathRef.current.length > MAX_PATH_POINTS) {
-                pathRef.current = pathRef.current.slice(-MAX_PATH_POINTS);
-              }
-              
               setCurrentPath([...pathRef.current]);
 
-              // LÓGICA DE GUARDADO INTELIGENTE
               if (unsavedMilesRef.current >= SAVE_THRESHOLD) {
-                  saveToDisk(newMiles, [...pathRef.current]);
-              } else {
-                  log(`Acumulando: ${unsavedMilesRef.current.toFixed(4)} / ${SAVE_THRESHOLD}`);
+                saveToDisk(newMiles, [...pathRef.current]);
               }
             }
           } else {
-            // 🆕 PRIMER PUNTO: Guardar Y geocodificar origen
             lastCoords.current = point;
             pathRef.current.push(point);
             setCurrentPath([...pathRef.current]);
             saveToDisk(milesRef.current, [...pathRef.current]);
             
-            // 🆕 Geocodificar dirección de inicio (solo una vez)
             if (!hasGeocodedStart.current && accuracy <= MAX_ACCURACY) {
               hasGeocodedStart.current = true;
-              log('📍 Geocodificando punto de inicio...');
-              
-              getAddressFromCoords(lat, lon).then(address => {
-                if (address) {
-                  setStartAddress(address);
-                  log('✅ Dirección de inicio guardada');
-                } else {
-                  log('⚠️ No se pudo obtener dirección de inicio');
-                }
-              }).catch(err => {
-                console.error('Error geocodificando inicio:', err);
-              });
+              getAddressFromCoords(lat, lon).then(addr => addr && setStartAddress(addr));
             }
           }
         }
       );
-      log('✅ GPS Iniciado/Restaurado ID:', watcherId.current);
-
     } catch (e) {
-      console.error("Error iniciando GPS:", e);
+      console.error(e);
       setIsTracking(false);
-      alert("Error GPS: " + e.message);
     }
   };
 
@@ -286,140 +265,75 @@ const getAddressFromCoords = async (lat, lon) => {
     await Preferences.remove({ key: TRIP_STORAGE_KEY });
     setWasGPSUsed(false);
     lastCoords.current = null;
-    
-    // 🆕 Resetear direcciones al iniciar viaje nuevo
     setStartAddress(null);
     setEndAddress(null);
     setGeocodingError(null);
     hasGeocodedStart.current = false;
-    
     await _startWatcher(0, [], typeRef.current);
   };
 
   const stopTrip = async () => {
-    // 🆕 Geocodificar dirección final ANTES de detener el watcher
     let finalEndAddress = endAddress;
     
     if (lastCoords.current && !finalEndAddress) {
-      log('📍 Geocodificando punto final...');
-      
-      try {
-        finalEndAddress = await getAddressFromCoords(
-          lastCoords.current.lat,
-          lastCoords.current.lon
-        );
-        
-        if (finalEndAddress) {
-          setEndAddress(finalEndAddress);
-          log('✅ Dirección final obtenida');
-        } else {
-          log('⚠️ No se pudo obtener dirección final');
-        }
-      } catch (err) {
-        console.error('Error geocodificando final:', err);
-      }
+      finalEndAddress = await getAddressFromCoords(lastCoords.current.lat, lastCoords.current.lon);
+      if (finalEndAddress) setEndAddress(finalEndAddress);
     }
 
-    // Detener watcher
     if (watcherId.current) {
-        try {
-            await BackgroundGeolocation.removeWatcher({ id: watcherId.current });
-        } catch (e) {
-            console.warn("Error deteniendo watcher", e);
-        }
+      await BackgroundGeolocation.removeWatcher({ id: watcherId.current });
     }
     watcherId.current = null;
     setIsTracking(false);
     
-    // 🆕 Retornar datos finales CON direcciones
     const finalData = { 
         miles: milesRef.current,
         path: pathRef.current,
         type: typeRef.current,
-        startAddress: startAddress,      // 🆕 Dirección de origen
-        endAddress: finalEndAddress      // 🆕 Dirección de destino
+        startAddress: startAddress,
+        endAddress: finalEndAddress
     };
     
-    // Limpieza final
     await Preferences.remove({ key: TRIP_STORAGE_KEY });
-    unsavedMilesRef.current = 0;
-    
     return finalData;
   };
 
   const resetTrip = async () => {
-    setMiles(0);
-    milesRef.current = 0;
-    unsavedMilesRef.current = 0;
-    pathRef.current = [];
-    setCurrentPath([]);
-    lastCoords.current = null;
-    setWasGPSUsed(false);
-    
-    // 🆕 Limpiar direcciones
-    setStartAddress(null);
-    setEndAddress(null);
-    setGeocodingError(null);
+    setMiles(0); milesRef.current = 0; pathRef.current = [];
+    setCurrentPath([]); lastCoords.current = null; setWasGPSUsed(false);
+    setStartAddress(null); setEndAddress(null); setGeocodingError(null);
     hasGeocodedStart.current = false;
-    
     await Preferences.remove({ key: TRIP_STORAGE_KEY });
   };
 
   useEffect(() => {
     const checkSavedState = async () => {
-      try {
-        const { value } = await Preferences.get({ key: TRIP_STORAGE_KEY });
-        if (value) {
-          const savedState = JSON.parse(value);
-          if (savedState.isTracking) {
-            log("🔄 Restaurando viaje previo...");
-            await _startWatcher(savedState.miles, savedState.path, savedState.type);
-          }
-        }
-      } catch (e) {
-        console.error("Error recuperando estado:", e);
+      const { value } = await Preferences.get({ key: TRIP_STORAGE_KEY });
+      if (value) {
+        const saved = JSON.parse(value);
+        if (saved.isTracking) await _startWatcher(saved.miles, saved.path, saved.type);
       }
     };
-
     checkSavedState();
-
     return () => {
-      if (watcherId.current) {
-        BackgroundGeolocation.removeWatcher({ id: watcherId.current });
-      }
+      if (watcherId.current) BackgroundGeolocation.removeWatcher({ id: watcherId.current });
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- 6. EFECTO: Refrescar pantalla al volver de segundo plano ---
   useEffect(() => {
     const subscription = App.addListener('appStateChange', ({ isActive }) => {
       if (isActive && isTracking) {
-        log("📱 App volvió a primer plano. Actualizando UI.");
         setMiles(milesRef.current); 
         setCurrentPath([...pathRef.current]);
       }
     });
-
-    return () => {
-      subscription.then(sub => sub.remove());
-    };
+    return () => { subscription.then(sub => sub.remove()); };
   }, [isTracking]);
 
-  // 🆕 Retorno actualizado con las nuevas propiedades
   return { 
-      isTracking, 
-      miles, 
-      type, 
-      setType: changeType,
-      currentPath, 
-      gpsQuality, 
-      wasGPSUsed,
-      startAddress,        // 🆕 Dirección de origen
-      endAddress,          // 🆕 Dirección de destino
-      geocodingError,      // 🆕 Error de geocodificación (si existe)
-      startTrip, 
-      stopTrip, 
-      resetTrip 
+      isTracking, miles, type, setType: changeType,
+      currentPath, gpsQuality, wasGPSUsed,
+      startAddress, endAddress, geocodingError,
+      savePlace, startTrip, stopTrip, resetTrip 
   };
 };
